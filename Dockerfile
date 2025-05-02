@@ -3,6 +3,8 @@ FROM node:20-alpine AS builder
 
 # Install system dependencies untuk Prisma
 RUN apk add --no-cache openssl python3 make g++
+RUN npm install -g npm@latest
+
 
 WORKDIR /app
 
