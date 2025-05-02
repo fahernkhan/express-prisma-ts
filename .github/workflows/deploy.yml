@@ -48,3 +48,6 @@ jobs:
               -p 3000:3000 \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            sleep 10
+            docker exec app npx prisma migrate deploy
+            docker logs app
