@@ -61,67 +61,67 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-deploy-prod:
-  name: Deploy to Production
-  needs: build-docker
-  runs-on: ubuntu-latest
-  environment: production
-  steps:
-    - name: Deploy to Server
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.AWS_HOST }}
-        username: ubuntu
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        script: |
-          # Hapus container lama dengan paksa
-          docker rm -f prod-app || true
-          
-          # Tunggu port dibebaskan
-          sleep 5
-          
-          # Pull image terbaru
-          docker pull $IMAGE
-          
-          # Jalankan container dengan health check
-          docker run -d \
-            --name prod-app \
-            --restart unless-stopped \
-            --health-cmd "curl -f http://localhost:3000/api/v1/health" \
-            --health-interval 10s \
-            -p 3000:3000 \
-            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            $IMAGE
+  deploy-prod:
+    name: Deploy to Production
+    needs: build-docker
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Hapus container lama dengan paksa
+            docker rm -f prod-app || true
             
-          # Tunggu maksimal 30 detik
-          timeout 30 bash -c '
-            while [ "$(docker inspect -f {{.State.Health.Status}} prod-app)" != "healthy" ]; do
-              sleep 3
-            done'
-          
-          # Lakukan migrasi
-          docker exec prod-app npx prisma migrate deploy || {
-            echo "Migration failed! Rolling back..."
-            docker rm -f prod-app
+            # Tunggu port dibebaskan
+            sleep 5
+            
+            # Pull image terbaru
+            docker pull $IMAGE
+            
+            # Jalankan container dengan health check
             docker run -d \
               --name prod-app \
+              --restart unless-stopped \
+              --health-cmd "curl -f http://localhost:3000/api/v1/health" \
+              --health-interval 10s \
               -p 3000:3000 \
-              $PREV_IMAGE
-            exit 1
-          }
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              $IMAGE
+              
+            # Tunggu maksimal 30 detik
+            timeout 30 bash -c '
+              while [ "$(docker inspect -f {{.State.Health.Status}} prod-app)" != "healthy" ]; do
+                sleep 3
+              done'
+            
+            # Lakukan migrasi
+            docker exec prod-app npx prisma migrate deploy || {
+              echo "Migration failed! Rolling back..."
+              docker rm -f prod-app
+              docker run -d \
+                --name prod-app \
+                -p 3000:3000 \
+                $PREV_IMAGE
+              exit 1
+            }
 
-    - name: Smoke Test
-      run: |
-        # Gunakan timeout 20 detik
-        timeout 20 bash -c '
-          until curl -sf http://${{ secrets.AWS_HOST }}:3000/api/v1/item; do
-            sleep 2
-          done'
-        
-        # Test CRUD
-        ITEM_ID=$(curl -s -X POST \
-          -H "Content-Type: application/json" \
-          -d '{"name":"smoke-test","price":1000}' \
-          http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq -r '.id')
-        
-        curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
+      - name: Smoke Test
+        run: |
+          # Gunakan timeout 20 detik
+          timeout 20 bash -c '
+            until curl -sf http://${{ secrets.AWS_HOST }}:3000/api/v1/item; do
+              sleep 2
+            done'
+          
+          # Test CRUD
+          ITEM_ID=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"name":"smoke-test","price":1000}' \
+            http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq -r '.id')
+          
+          curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
