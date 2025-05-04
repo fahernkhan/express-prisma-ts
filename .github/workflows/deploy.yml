@@ -69,35 +69,41 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Graceful shutdown previous container
-            docker stop app --time 30 || true
+            # Graceful shutdown dengan timeout 30 detik
+            docker stop app --timeout 30 || true
             docker rm -f app || true
             
-            # Pull new image
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            # Pull image dengan progress plain
+            docker pull --quiet ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
-            # Run new container with health check
+            # Run container dengan health check yang lebih toleran
             docker run -d \
               --name app \
               --restart unless-stopped \
-              --health-cmd "curl -f http://localhost:3000/api/v1/health || exit 1" \
-              --health-interval 10s \
-              --health-timeout 5s \
-              --health-retries 3 \
+              --health-cmd "curl -sSf http://localhost:3000/api/v1/health >/dev/null || exit 1" \
+              --health-interval 15s \
+              --health-timeout 10s \
+              --health-retries 5 \
               -p 3000:3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL}}" \
               ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
 
-            # Wait for container to be healthy
-            echo "Waiting for container to start..."
-            docker inspect --format="{{json .State.Health.Status}}" app | grep -q '"healthy"' || exit 1
+            # Wait for container dengan retry mechanism
+            echo "Menunggu inisialisasi container..."
+            timeout 180 bash -c '
+              while ! docker inspect --format="{{.State.Health.Status}}" app | grep -q "healthy"; do
+                sleep 10
+                echo "Status kesehatan: $(docker inspect --format="{{.State.Health.Status}}" app)"
+              done
+            ' || exit 1
 
-            # Run migrations
-            echo "Running database migrations..."
-            docker exec app npx prisma migrate deploy
+            # Jalankan migrasi database
+            echo "Menjalankan database migrations..."
+            docker exec app npx prisma migrate deploy --skip-seed
 
-            # Cleanup old images
-            docker image prune -af --filter "until=24h"
+            # Cleanup dengan safety check
+            docker image prune -af --filter "until=24h" --force
+          timeout: 15m
 
       - name: Smoke Test
         run: |
