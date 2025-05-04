@@ -3,7 +3,7 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main]
-  
+
 env:
   APP_NAME: express-prisma-ts
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -21,7 +21,12 @@ jobs:
           POSTGRES_DB: test
         ports:
           - 5432:5432
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        options: >-
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 2s
+          --health-retries 10
+          -p 5432:5432
 
     steps:
     - uses: actions/checkout@v4
@@ -34,9 +39,27 @@ jobs:
     - name: Install dependencies
       run: npm ci
       
+    - name: Verify DB Connection
+      timeout-minutes: 2
+      env:
+        DATABASE_URL: postgresql://test:test@localhost:5432/test
+      run: |
+        # Install psql client
+        sudo apt-get update && sudo apt-get install -y postgresql-client
+        
+        # Wait for database with retry
+        for i in {1..10}; do
+          pg_isready -h localhost -U test -d test && break
+          echo "Attempt $i failed. Retrying in 3 seconds..."
+          sleep 3
+        done
+        
+        # Final check
+        psql $DATABASE_URL -c "SELECT version()"
+
     - name: Run tests
       env:
-        DATABASE_URL: postgresql://test:test@postgres:5432/test
+        DATABASE_URL: postgresql://test:test@localhost:5432/test
       run: |
         npx prisma migrate dev --name init
         npm test
@@ -81,7 +104,7 @@ jobs:
             -p 3000:3000 \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             ${{ env.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-          sleep 5
+          sleep 10
           docker exec app npx prisma migrate deploy
 
     - name: Smoke Test
