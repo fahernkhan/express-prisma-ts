@@ -109,7 +109,7 @@ deploy-prod:
               $PREV_IMAGE
             exit 1
           }
-
+            
     - name: Smoke Test
       run: |
         # Gunakan timeout 20 detik
