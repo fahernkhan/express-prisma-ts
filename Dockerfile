@@ -36,7 +36,7 @@ COPY --from=builder /app/prisma ./prisma
 
 # Healthcheck untuk memastikan koneksi database
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD node -e "require('child_process').execSync('npx prisma migrate status', {stdio: 'inherit'})"
+  CMD psql "$DATABASE_URL" -c "SELECT 1"
 
 EXPOSE 3000
 
