@@ -74,8 +74,6 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Hapus container lama dengan paksa
-            docker rm -f prod-app || true
             
             # Tunggu port dibebaskan
             sleep 5
