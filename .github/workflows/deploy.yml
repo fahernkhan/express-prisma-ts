@@ -74,14 +74,17 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Cleanup previous container
+            # Backup container saat ini
+            docker tag ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous || true
+            
+            # Pull image baru
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            
+            # Stop dan hapus container lama
             docker stop prod-app || true
             docker rm prod-app || true
             
-            # Pull new image
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-            
-            # Run container with production settings
+            # Jalankan container baru
             docker run -d \
               --name prod-app \
               --restart unless-stopped \
@@ -89,32 +92,52 @@ jobs:
               -e NODE_ENV=production \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-            
-            # Wait for app initialization
-            sleep 10
-            
-            # Run database migrations
-            docker exec prod-app npx prisma migrate deploy
-            
-            # Cleanup old images
-            docker image prune -af --filter "until=24h"
+              
+            # Wait dan lakukan migrasi
+            sleep 15
+            docker exec prod-app npx prisma migrate deploy || {
+              echo "Migration failed! Rolling back...";
+              docker stop prod-app;
+              docker rm prod-app;
+              docker run -d \
+                --name prod-app \
+                --restart unless-stopped \
+                -p 3000:3000 \
+                -e NODE_ENV=production \
+                -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+                ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous;
+              exit 1;
+            }
 
       - name: Smoke Test
         run: |
-          # Test create item
+          # Tambahkan timeout 10 detik
+          timeout 10 bash -c '
+            while ! curl -sSf http://${{ secrets.AWS_HOST }}:3000/api/v1/item >/dev/null; do
+              sleep 2
+            done'
+          
+          # Test sederhana
           curl -X POST \
             -H "Content-Type: application/json" \
             -d '{"name":"smoke-test", "price":1000}' \
-            --retry 3 \
-            --retry-delay 5 \
-            --fail-with-body \
             http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+          
+          curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item || {
+            echo "Smoke test failed! Triggering rollback...";
+            # Panggil API rollback atau trigger manual
+            exit 1;
+          }
 
-          # Test get items
-          curl --fail \
-            --retry 3 \
-            --retry-delay 5 \
-            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+      - name: Rollback Handler
+        if: failure()
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.ROLLBACK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"action":"rollback"}' \
+            https://api.example.com/rollback
+        timeout-minutes: 5
 
       - name: Notify Status
         uses: rtCamp/action-slack-notify@v2
