@@ -1,8 +1,12 @@
-const http = require('http');
+import express from 'express';
+const router = express.Router();
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200, {'Content-Type': 'application/json'});
-  res.end(JSON.stringify({status: 'ok', timestamp: new Date()}));
+router.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date(),
+    version: process.env.npm_package_version
+  });
 });
 
-server.listen(3000);
+export default router;

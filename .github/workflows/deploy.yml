@@ -1,4 +1,4 @@
-name: AWS Enhanced Deployment
+name: Production Deployment Pipeline
 
 on:
   push:
@@ -7,12 +7,35 @@ on:
     branches: [main]
 
 env:
-  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-  IMAGE_NAME: express-prisma-ts
-  NODE_ENV: test
+  APP_NAME: express-prisma-ts
+  DOCKER_REGISTRY: docker.io
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
 
 jobs:
-  test:
+  quality-checks:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci
+      
+      - name: Linter Check
+        run: npm run lint
+        
+      - name: Security Audit
+        run: npm audit --production
+
+  unit-tests:
+    name: Run Unit Tests
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -23,137 +46,107 @@ jobs:
           POSTGRES_DB: test
         ports:
           - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U test -d test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --name postgres
-        volumes:
-          - pgdata:/var/lib/postgresql/data
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
     
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
-
-      - name: Wait for PostgreSQL
-        timeout-minutes: 2
-        env:
-          DATABASE_URL: postgresql://test:test@postgres:5432/test
-        run: |
-          # Install wait-for-it script
-          curl -O https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh
-          chmod +x wait-for-it.sh
-          ./wait-for-it.sh postgres:5432 --timeout=30
-          
-          # Verify connection
-          psql $DATABASE_URL -c "SELECT 1"
-
+        
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
-
-      - name: Install dependencies
+          
+      - name: Install Dependencies
         run: npm ci
-
-      - name: Run migrations
+      
+      - name: Run Database Migrations
         env:
           DATABASE_URL: postgresql://test:test@postgres:5432/test
-        run: |
-          npx prisma migrate dev --name init
-          npx prisma db push
-
-      - name: Run tests
+        run: npx prisma migrate dev --name init
+      
+      - name: Execute Tests
         env:
           DATABASE_URL: postgresql://test:test@postgres:5432/test
         run: npm test
 
-
-      - name: Upload Coverage Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-
-  build-and-push:
-    needs: test
+  build-image:
+    name: Build & Push Docker Image
+    needs: [quality-checks, unit-tests]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
+      
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push
+      
+      - name: Build Production Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: |
-            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          sbom: true
-          provenance: true
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
-    needs: [build-and-push]
+  deploy-production:
+    name: Deploy to Production
+    needs: build-image
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Deploy to EC2
+      - name: Deploy to AWS EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -ex
-            docker compose version || sudo apt-get install docker-compose-plugin -y
-            docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            docker tag ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            docker stop app || true
-            docker rm app || true
+            # Pull latest image
+            docker pull ${{ env.DOCKER_IMAGE }}:latest
+            
+            # Stop existing container
+            docker stop production-app || true
+            docker rm production-app || true
+            
+            # Start new container
             docker run -d \
-              --name app \
+              --name production-app \
               --restart unless-stopped \
               -p 3000:3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e NODE_ENV=production \
-              ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            sleep 10
-            docker exec app npx prisma migrate deploy
-            docker system prune -af --filter "until=24h"
-
-      - name: Smoke Test
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              ${{ env.DOCKER_IMAGE }}:latest
+            
+            # Run database migrations
+            sleep 10 # Wait for app to initialize
+            docker exec production-app npx prisma migrate deploy
+            
+            # Cleanup old images
+            docker image prune -af --filter "until=24h"
+      
+      - name: Verify Deployment
         run: |
-          curl --retry 3 --retry-delay 5 --retry-connrefused \
-            -X POST http://${{ secrets.AWS_HOST }}:3000/health \
-            -H "Content-Type: application/json" \
-            --fail-with-body
-
-      - name: Notify Slack
+          curl --fail-with-body \
+            --retry 3 \
+            --retry-delay 5 \
+            http://${{ secrets.AWS_HOST }}:3000/health
+          
+      - name: Send Notification
         uses: rtCamp/action-slack-notify@v2
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
-          SLACK_TITLE: "Deployment to Production"
+          SLACK_COLOR: ${{ job.status == 'success' && '#36a64f' || '#ff0000' }}
+          SLACK_TITLE: "Deployment Status: ${{ job.status }}"
           SLACK_MESSAGE: |
-            *Status*: ${{ job.status }}
+            *Application*: ${{ env.APP_NAME }}
+            *Environment*: Production
             *Commit*: \`${{ github.sha }}\`
-            *Environment*: production
             *Duration*: ${{ job.steps[*].duration }}
