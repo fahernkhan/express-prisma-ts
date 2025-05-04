@@ -20,13 +20,12 @@ jobs:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: test
         ports:
-          - 5432:5432
+          - 5432:5432 # HAPUS duplicate port mapping di options
         options: >-
           --health-cmd "pg_isready -U test -d test"
-          --health-interval 5s
-          --health-timeout 2s
-          --health-retries 10
-          -p 5432:5432
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
 
     steps:
     - uses: actions/checkout@v4
@@ -44,17 +43,12 @@ jobs:
       env:
         DATABASE_URL: postgresql://test:test@localhost:5432/test
       run: |
-        # Install psql client
         sudo apt-get update && sudo apt-get install -y postgresql-client
-        
-        # Wait for database with retry
-        for i in {1..10}; do
+        for i in {1..15}; do
           pg_isready -h localhost -U test -d test && break
-          echo "Attempt $i failed. Retrying in 3 seconds..."
-          sleep 3
+          echo "Attempt $i failed. Retrying in 2 seconds..."
+          sleep 2
         done
-        
-        # Final check
         psql $DATABASE_URL -c "SELECT version()"
 
     - name: Run tests
