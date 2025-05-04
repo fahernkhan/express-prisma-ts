@@ -22,7 +22,7 @@ jobs:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: test
         ports:
-          - 5432:5432
+          - 5433:5433
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -49,14 +49,14 @@ jobs:
 
       - name: Initialize Test Database
         env:
-          DATABASE_URL: postgresql://test:test@postgres:5432/test
+          DATABASE_URL: postgresql://test:test@postgres:5433/test
         run: |
           npx prisma migrate dev --name init
           npx prisma db push
 
       - name: Run Tests
         env:
-          DATABASE_URL: postgresql://test:test@postgres:5432/test
+          DATABASE_URL: postgresql://test:test@postgres:5433/test
         run: npm test
 
       - name: Upload Coverage Report

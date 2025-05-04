@@ -34,6 +34,10 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
 
+# Healthcheck untuk memastikan koneksi database
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD node -e "require('child_process').execSync('npx prisma migrate status', {stdio: 'inherit'})"
+
 EXPOSE 3000
 
 CMD ["sh", "-c", "npx prisma migrate deploy && npm start"]
