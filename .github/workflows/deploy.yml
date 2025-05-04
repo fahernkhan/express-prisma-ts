@@ -45,7 +45,12 @@ jobs:
           POSTGRES_DB: test
         ports:
           - 5432:5432
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        options: >-
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 2s
+          --health-retries 10
+          --name postgres-db
 
     steps:
       - name: Checkout Code
@@ -55,26 +60,40 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Install Dependencies
         run: npm ci
 
+      - name: Install PostgreSQL Client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
       - name: Wait for Database
-        timeout-minutes: 2
+        timeout-minutes: 3
+        env:
+          DATABASE_URL: postgresql://test:test@postgres-db:5432/test
         run: |
+          # Kombinasi wait-for-it dan check koneksi
+          curl -O https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh
+          chmod +x wait-for-it.sh
+          ./wait-for-it.sh postgres-db:5432 --timeout=30
+          
+          # Verifikasi koneksi dengan credential
           for i in {1..10}; do
-            pg_isready -h postgres -U test -d test && break || sleep 5
-            echo "Retry $i/10"
+            psql $DATABASE_URL -c "SELECT 1" && break || sleep 3
+            echo "Retry connection attempt $i/10"
           done
 
-      - name: Run Database Migrations
+      - name: Run Migrations
         env:
-          DATABASE_URL: postgresql://test:test@postgres:5432/test
-        run: npx prisma migrate dev --name init
+          DATABASE_URL: postgresql://test:test@postgres-db:5432/test
+        run: |
+          npx prisma migrate dev --name init
+          npx prisma db push
 
       - name: Execute Tests
         env:
-          DATABASE_URL: postgresql://test:test@postgres:5432/test
+          DATABASE_URL: postgresql://test:test@postgres-db:5432/test
         run: npm test
 
   build-docker:
