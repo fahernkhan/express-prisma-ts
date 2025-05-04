@@ -61,57 +61,57 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-deploy-prod:
-  name: Deploy to Production
-  needs: [build-docker]
-  runs-on: ubuntu-latest
-  environment: production
-  env:
-    DOCKER_IMAGE: "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest"
-    PREV_IMAGE: "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous"
-  steps:
-    - name: Deploy to Server
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.AWS_HOST }}
-        username: ubuntu
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        script: |
-          # Backup image sebelumnya
-          docker tag $DOCKER_IMAGE $PREV_IMAGE || true
-          
-          # Hapus container lama dengan paksa
-          docker rm -f prod-app || true
-          
-          # Pull image terbaru
-          docker pull "$DOCKER_IMAGE"
-          
-          # Jalankan container baru
-          docker run -d \
-            --name prod-app \
-            --restart unless-stopped \
-            --health-cmd "curl -f http://localhost:3000/api/v1/health" \
-            --health-interval 10s \
-            -p 3000:3000 \
-            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            "$DOCKER_IMAGE"
+  deploy-prod:
+    name: Deploy to Production
+    needs: [build-docker]
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DOCKER_IMAGE: "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest"
+      PREV_IMAGE: "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous"
+    steps:
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Backup image sebelumnya
+            docker tag $DOCKER_IMAGE $PREV_IMAGE || true
             
-          # Tunggu maksimal 30 detik
-          timeout 30 bash -c '
-            while [ "$(docker inspect -f "{{.State.Health.Status}}" prod-app)" != "healthy" ]; do
-              sleep 3
-            done'
-          
-          # Lakukan migrasi
-          docker exec prod-app npx prisma migrate deploy || {
-            echo "Migration failed! Rolling back..."
-            docker rm -f prod-app
+            # Hapus container lama dengan paksa
+            docker rm -f prod-app || true
+            
+            # Pull image terbaru
+            docker pull "$DOCKER_IMAGE"
+            
+            # Jalankan container baru
             docker run -d \
               --name prod-app \
+              --restart unless-stopped \
+              --health-cmd "curl -f http://localhost:3000/api/v1/health" \
+              --health-interval 10s \
               -p 3000:3000 \
-              "$PREV_IMAGE"
-            exit 1
-          }
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              "$DOCKER_IMAGE"
+              
+            # Tunggu maksimal 30 detik
+            timeout 30 bash -c '
+              while [ "$(docker inspect -f "{{.State.Health.Status}}" prod-app)" != "healthy" ]; do
+                sleep 3
+              done'
+            
+            # Lakukan migrasi
+            docker exec prod-app npx prisma migrate deploy || {
+              echo "Migration failed! Rolling back..."
+              docker rm -f prod-app
+              docker run -d \
+                --name prod-app \
+                -p 3000:3000 \
+                "$PREV_IMAGE"
+              exit 1
+            }
 
       - name: Smoke Test
         run: |
