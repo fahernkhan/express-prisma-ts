@@ -30,13 +30,12 @@ jobs:
           --health-retries 10
         volumes:
           - pgdata:/var/lib/postgresql/data
-
-    steps:
-      - name: Check PostgreSQL health
-        run: |
-          docker inspect --format='{{json .State.Health}}' postgres
     
     steps:
+      - name: Check PostgreSQL health
+      run: |
+        docker inspect --format='{{json .State.Health}}' postgres
+
       - name: Checkout code
         uses: actions/checkout@v4
 
