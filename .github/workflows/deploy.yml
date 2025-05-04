@@ -28,13 +28,23 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+          --name postgres
         volumes:
           - pgdata:/var/lib/postgresql/data
     
     steps:
       - name: Check PostgreSQL health
         run: |
-          docker inspect --format='{{json .State.Health}}' postgres
+          CONTAINER_ID=$(docker ps -qf "name=postgres")
+          
+          # Verifikasi container exists
+          if [ -z "$CONTAINER_ID" ]; then
+            echo "Container postgres not found!"
+            exit 1
+          fi
+          
+          # Inspect health status
+          docker inspect --format='{{json .State.Health}}' $CONTAINER_ID
 
       - name: Checkout code
         uses: actions/checkout@v4
