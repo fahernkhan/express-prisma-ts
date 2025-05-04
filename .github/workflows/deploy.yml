@@ -1,4 +1,4 @@
-name: Production Deployment
+name: Production Deployment Pipeline
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
         run: npm audit --production
 
   unit-tests:
-    name: Run Unit Tests
+    name: Unit Tests with PostgreSQL
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -67,7 +67,7 @@ jobs:
             echo "Retry $i/10"
           done
 
-      - name: Run Migrations
+      - name: Run Database Migrations
         env:
           DATABASE_URL: postgresql://test:test@postgres:5432/test
         run: npx prisma migrate dev --name init
@@ -81,9 +81,6 @@ jobs:
     name: Build and Push Docker Image
     needs: [code-quality, unit-tests]
     runs-on: ubuntu-latest
-    env:
-      DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
-      
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -103,8 +100,8 @@ jobs:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: |
-            ${{ env.DOCKER_IMAGE }}:latest
-            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -113,9 +110,6 @@ jobs:
     needs: build-docker
     runs-on: ubuntu-latest
     environment: production
-    env:
-      DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
-      
     steps:
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
@@ -129,7 +123,7 @@ jobs:
             docker rm prod-app || true
             
             # Pull new image
-            docker pull ${{ env.DOCKER_IMAGE }}:latest
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
             # Run container with production settings
             docker run -d \
@@ -138,9 +132,9 @@ jobs:
               -p 3000:3000 \
               -e NODE_ENV=production \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              ${{ env.DOCKER_IMAGE }}:latest
+              ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
-            # Wait for app to start
+            # Wait for app initialization
             sleep 10
             
             # Run database migrations
@@ -151,6 +145,7 @@ jobs:
 
       - name: Smoke Test
         run: |
+          # Test create item
           curl -X POST \
             -H "Content-Type: application/json" \
             -d '{"name":"smoke-test", "price":1000}' \
@@ -159,6 +154,7 @@ jobs:
             --fail-with-body \
             http://${{ secrets.AWS_HOST }}:3000/api/v1/item
 
+          # Test get items
           curl --fail \
             --retry 3 \
             --retry-delay 5 \
@@ -170,9 +166,9 @@ jobs:
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
-          SLACK_TITLE: "Deployment Result - ${{ job.status }}"
+          SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
           SLACK_MESSAGE: |
-            *Application*: ${{ env.APP_NAME }}
             *Environment*: Production
             *Commit SHA*: \`${{ github.sha }}\`
+            *Result*: ${{ job.status }}
             *Duration*: ${{ job.steps[*].duration }}
