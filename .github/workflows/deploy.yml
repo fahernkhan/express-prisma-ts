@@ -30,7 +30,7 @@ jobs:
           --health-retries 10
         volumes:
           - pgdata:/var/lib/postgresql/data
-    
+
     steps:
       - name: Check PostgreSQL health
         run: |
