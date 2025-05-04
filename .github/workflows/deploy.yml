@@ -1,4 +1,4 @@
-name: Production Deployment Pipeline
+name: Production Deployment
 
 on:
   push:
@@ -7,30 +7,29 @@ on:
     branches: [main]
 
 env:
-  APP_NAME: express-prisma-ts
-  DOCKER_REGISTRY: docker.io
-  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
+  APP_NAME: "express-prisma-ts"
+  DOCKER_REGISTRY: "docker.io"
 
 jobs:
-  quality-checks:
-    name: Code Quality & Security
+  code-quality:
+    name: Code Quality Checks
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
-          
+
       - name: Install Dependencies
         run: npm ci
-      
-      - name: Linter Check
+
+      - name: Run Linter
         run: npm run lint
-        
+
       - name: Security Audit
         run: npm audit --production
 
@@ -47,44 +46,58 @@ jobs:
         ports:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          
+
       - name: Install Dependencies
         run: npm ci
-      
-      - name: Run Database Migrations
+
+      - name: Wait for Database
+        timeout-minutes: 2
+        run: |
+          for i in {1..10}; do
+            pg_isready -h postgres -U test -d test && break || sleep 5
+            echo "Retry $i/10"
+          done
+
+      - name: Run Migrations
         env:
           DATABASE_URL: postgresql://test:test@postgres:5432/test
         run: npx prisma migrate dev --name init
-      
+
       - name: Execute Tests
         env:
           DATABASE_URL: postgresql://test:test@postgres:5432/test
         run: npm test
 
-  build-image:
-    name: Build & Push Docker Image
-    needs: [quality-checks, unit-tests]
+  build-docker:
+    name: Build and Push Docker Image
+    needs: [code-quality, unit-tests]
     runs-on: ubuntu-latest
+    env:
+      DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
+      
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
-      - name: Build Production Image
+
+      - name: Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -95,58 +108,71 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-production:
+  deploy-prod:
     name: Deploy to Production
-    needs: build-image
+    needs: build-docker
     runs-on: ubuntu-latest
     environment: production
+    env:
+      DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
+      
     steps:
-      - name: Deploy to AWS EC2
+      - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Pull latest image
+            # Cleanup previous container
+            docker stop prod-app || true
+            docker rm prod-app || true
+            
+            # Pull new image
             docker pull ${{ env.DOCKER_IMAGE }}:latest
             
-            # Stop existing container
-            docker stop production-app || true
-            docker rm production-app || true
-            
-            # Start new container
+            # Run container with production settings
             docker run -d \
-              --name production-app \
+              --name prod-app \
               --restart unless-stopped \
               -p 3000:3000 \
               -e NODE_ENV=production \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               ${{ env.DOCKER_IMAGE }}:latest
             
+            # Wait for app to start
+            sleep 10
+            
             # Run database migrations
-            sleep 10 # Wait for app to initialize
-            docker exec production-app npx prisma migrate deploy
+            docker exec prod-app npx prisma migrate deploy
             
             # Cleanup old images
             docker image prune -af --filter "until=24h"
-      
-      - name: Verify Deployment
+
+      - name: Smoke Test
         run: |
-          curl --fail-with-body \
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"name":"smoke-test", "price":1000}' \
             --retry 3 \
             --retry-delay 5 \
-            http://${{ secrets.AWS_HOST }}:3000/health
-          
-      - name: Send Notification
+            --fail-with-body \
+            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+
+          curl --fail \
+            --retry 3 \
+            --retry-delay 5 \
+            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+
+      - name: Notify Status
         uses: rtCamp/action-slack-notify@v2
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_COLOR: ${{ job.status == 'success' && '#36a64f' || '#ff0000' }}
-          SLACK_TITLE: "Deployment Status: ${{ job.status }}"
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_TITLE: "Deployment Result - ${{ job.status }}"
           SLACK_MESSAGE: |
             *Application*: ${{ env.APP_NAME }}
             *Environment*: Production
-            *Commit*: \`${{ github.sha }}\`
+            *Commit SHA*: \`${{ github.sha }}\`
             *Duration*: ${{ job.steps[*].duration }}
