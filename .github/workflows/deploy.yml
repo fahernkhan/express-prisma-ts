@@ -110,7 +110,7 @@ deploy-prod:
             exit 1
           }
 
-        - name: Smoke Test
+    - name: Smoke Test
       run: |
         # Gunakan timeout 20 detik
         timeout 20 bash -c '
@@ -125,26 +125,3 @@ deploy-prod:
           http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq -r '.id')
         
         curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
-
-    - name: Rollback Handler
-      if: failure()
-      timeout-minutes: 5
-      run: |
-        curl -X POST \
-          -H "Authorization: Bearer ${{ secrets.ROLLBACK_TOKEN }}" \
-          -H "Content-Type: application/json" \
-          -d '{"action":"rollback"}' \
-          https://api.example.com/rollback
-
-    - name: Notify Status
-      uses: rtCamp/action-slack-notify@v2
-      if: always()
-      env:
-        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
-        SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
-        SLACK_MESSAGE: |
-          *Environment*: Production
-          *Commit SHA*: \`${{ github.sha }}\`
-          *Result*: ${{ job.status }}
-          *Duration*: ${{ job.steps[*].duration }}
