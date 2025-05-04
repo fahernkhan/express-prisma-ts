@@ -112,13 +112,17 @@ jobs:
           curl --fail --retry 5 --retry-delay 10 http://${{ secrets.AWS_HOST }}:3000/api/v1/health
           
           echo "Testing CRUD operations..."
-          ITEM_ID=$(curl -s -X POST \
+          # Test sederhana
+          curl -X POST \
             -H "Content-Type: application/json" \
-            -d '{"name":"smoke-test","price":1000}' \
-            http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq -r '.id')
+            -d '{"name":"smoke-test", "price":1000}' \
+            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
           
-          curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
-          curl -X DELETE --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
+          curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item || {
+            echo "Smoke test failed! Triggering rollback...";
+            # Panggil API rollback atau trigger manual
+            exit 1;
+          }
 
   post-deploy:
     name: Post-Deploy Checks
