@@ -3,7 +3,12 @@ import tsPlugin from '@typescript-eslint/eslint-plugin';
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**']
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      '*.config.js',
+      '.github/**'
+    ]
   },
   {
     files: ['**/*.ts', '**/*.js'],
@@ -16,7 +21,6 @@ export default [
       '@typescript-eslint': tsPlugin
     },
     rules: {
-      ...tsPlugin.configs.recommended.rules,
       '@typescript-eslint/no-unused-expressions': [
         'error',
         {
