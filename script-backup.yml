@@ -1,4 +1,4 @@
-name: Production Deployment
+name: Enhanced Production Deployment
 
 on:
   push:
@@ -40,13 +40,13 @@ jobs:
         run: npm run lint
 
       - name: Run Security Audit
-        run: npm run security:audit
+        run: npm audit --production
 
       - name: Run Tests
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          DATABASE_URL: postgresql://test:test@postgres:5432/test
         run: |
-          npx prisma migrate dev --name init
+          npx prisma migrate deploy
           npm test
 
       - name: Upload Coverage Report
@@ -78,6 +78,7 @@ jobs:
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:prev
             ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           sbom: true
           provenance: true
@@ -88,22 +89,26 @@ jobs:
     environment: production
     steps:
       - name: Deploy to EC2
+        id: deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
+            docker compose version || sudo apt-get install docker-compose-plugin
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --force-recreate
-            docker image prune -af
+            docker image prune -af --filter "until=24h"
 
       - name: Run Smoke Test
+        timeout-minutes: 5
         run: |
-          curl -X POST http://${{ secrets.AWS_HOST }}:3000/api/v1/item \
+          curl --retry 3 --retry-delay 5 -X POST http://${{ secrets.AWS_HOST }}:3000/api/v1/item \
             -H "Content-Type: application/json" \
             -d '{"name":"smoke-test", "price":1}'
-          curl http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq
+          curl --retry 3 --retry-delay 5 http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq
 
       - name: Post Deployment Test
         uses: artemkloko/loader-action@v2
@@ -112,10 +117,25 @@ jobs:
           duration: 60
           rps: 50
 
+      - name: Rollback if failed
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            docker compose -f docker-compose.prod.yml down
+            docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:prev
+            docker compose -f docker-compose.prod.yml up -d
+
       - name: Notify Status
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
           SLACK_TITLE: "Deployment Completed"
-          SLACK_MESSAGE: "Status: ${{ job.status }}"
+          SLACK_MESSAGE: |
+            Status: ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Environment: production
