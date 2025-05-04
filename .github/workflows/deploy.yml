@@ -33,21 +33,24 @@ jobs:
           - pgdata:/var/lib/postgresql/data
     
     steps:
-      - name: Check PostgreSQL health
-        run: |
-          CONTAINER_ID=$(docker ps -qf "name=postgres")
-          
-          # Verifikasi container exists
-          if [ -z "$CONTAINER_ID" ]; then
-            echo "Container postgres not found!"
-            exit 1
-          fi
-          
-          # Inspect health status
-          docker inspect --format='{{json .State.Health}}' $CONTAINER_ID
-
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for PostgreSQL
+        timeout-minutes: 2
+        env:
+          DATABASE_URL: postgresql://test:test@postgres:5432/test
+        run: |
+          # Install wait-for-it script
+          curl -O https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh
+          chmod +x wait-for-it.sh
+          ./wait-for-it.sh postgres:5432 --timeout=30
+          
+          # Verify connection
+          psql $DATABASE_URL -c "SELECT 1"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -57,20 +60,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Wait for PostgreSQL
-        timeout-minutes: 2
-        env:
-          PGHOST: postgres
-          PGPORT: 5432
-          PGUSER: test
-          PGPASSWORD: test
-          PGDATABASE: test
-        run: |
-          for i in {1..10}; do
-            psql -c "SELECT 1" && break || sleep 3
-            echo "Retry $i/10"
-          done
 
       - name: Run migrations
         env:
