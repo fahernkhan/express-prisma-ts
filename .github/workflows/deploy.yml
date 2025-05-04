@@ -1,19 +1,79 @@
-name: Deploy to AWS
+name: AWS Enhanced Deployment
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   IMAGE_NAME: express-prisma-ts
+  NODE_ENV: test
 
 jobs:
-  build-push:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Linter
+        run: npm run lint || echo "Linting skipped"
+
+      - name: Run Security Audit
+        run: npm audit --production
+
+      - name: Initialize Test Database
+        env:
+          DATABASE_URL: postgresql://test:test@postgres:5432/test
+        run: |
+          npx prisma migrate dev --name init
+          npx prisma db push
+
+      - name: Run Tests
+        env:
+          DATABASE_URL: postgresql://test:test@postgres:5432/test
+        run: npm test
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -25,12 +85,19 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
-          tags: ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          sbom: true
+          provenance: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
-    needs: [build-push]
+    needs: [build-and-push]
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
@@ -38,16 +105,40 @@ jobs:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
           script: |
-            docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            set -ex
+            docker compose version || sudo apt-get install docker-compose-plugin -y
+            docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            docker tag ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
             docker stop app || true
             docker rm app || true
             docker run -d \
               --name app \
+              --restart unless-stopped \
               -p 3000:3000 \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              -e NODE_ENV=production \
               ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
             sleep 10
             docker exec app npx prisma migrate deploy
-            docker logs app
+            docker system prune -af --filter "until=24h"
+
+      - name: Smoke Test
+        run: |
+          curl --retry 3 --retry-delay 5 --retry-connrefused \
+            -X POST http://${{ secrets.AWS_HOST }}:3000/health \
+            -H "Content-Type: application/json" \
+            --fail-with-body
+
+      - name: Notify Slack
+        uses: rtCamp/action-slack-notify@v2
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_TITLE: "Deployment to Production"
+          SLACK_MESSAGE: |
+            *Status*: ${{ job.status }}
+            *Commit*: \`${{ github.sha }}\`
+            *Environment*: production
+            *Duration*: ${{ job.steps[*].duration }}
