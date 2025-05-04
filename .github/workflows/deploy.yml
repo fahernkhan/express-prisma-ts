@@ -1,19 +1,69 @@
-name: Deploy to AWS
+name: AWS Production Deployment
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   IMAGE_NAME: express-prisma-ts
+  NODE_ENV: test
 
 jobs:
-  build-push:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Linter
+        run: npm run lint
+
+      - name: Run Security Audit
+        run: npm audit --production
+
+      - name: Run Tests
+        env:
+          DATABASE_URL: postgresql://test:test@postgres:5432/test
+        run: |
+          npx prisma migrate deploy
+          npm test
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: coverage/
+
+  build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -25,29 +75,67 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
-          tags: ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:prev
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          sbom: true
+          provenance: true
 
   deploy:
-    needs: [build-push]
+    needs: [build-and-push]
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Deploy to EC2
+        id: deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
           script: |
-            docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            docker stop app || true
-            docker rm app || true
-            docker run -d \
-              --name app \
-              -p 3000:3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            sleep 10
-            docker exec app npx prisma migrate deploy
-            docker logs app
+            set -e
+            docker compose version || sudo apt-get install docker-compose-plugin
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --force-recreate
+            docker image prune -af --filter "until=24h"
+
+      - name: Run Smoke Test
+        timeout-minutes: 5
+        run: |
+          curl --retry 3 --retry-delay 5 -X POST http://${{ secrets.AWS_HOST }}:3000/api/v1/item \
+            -H "Content-Type: application/json" \
+            -d '{"name":"smoke-test", "price":1}'
+          curl --retry 3 --retry-delay 5 http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq
+
+      - name: Post Deployment Test
+        uses: artemkloko/loader-action@v2
+        with:
+          target: http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+          duration: 60
+          rps: 50
+
+      - name: Rollback if failed
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            docker compose -f docker-compose.prod.yml down
+            docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:prev
+            docker compose -f docker-compose.prod.yml up -d
+
+      - name: Notify Status
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_TITLE: "Deployment Completed"
+          SLACK_MESSAGE: |
+            Status: ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Environment: production
