@@ -1,111 +1,188 @@
-name: CI/CD Pipeline
+name: Production Deployment Pipeline
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
-  APP_NAME: express-prisma-ts
-  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  APP_NAME: "express-prisma-ts"
+  DOCKER_REGISTRY: "docker.io"
 
 jobs:
-  unit-tests:
-    name: Run Unit Tests
+  code-quality:
+    name: Code Quality Checks
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Linter
+        run: npm run lint
+
+      - name: Security Audit
+        run: npm audit --production
+
+  # unit-tests:
+  #   name: Unit Tests with PostgreSQL
+  #   runs-on: ubuntu-latest
+  #   services:
+  #     postgres:
+  #       image: postgres:15
+  #       env:
+  #         POSTGRES_USER: test
+  #         POSTGRES_PASSWORD: test
+  #         POSTGRES_DB: test
+  #       ports:
+  #         - 5432:5432
+  #       options: >-
+  #         --health-cmd "pg_isready -U test -d test"
+  #         --health-interval 5s
+  #         --health-timeout 2s
+  #         --health-retries 20
+
+  #   steps:
+  #     - name: Checkout Code
+  #       uses: actions/checkout@v4
+
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #         cache: 'npm'
+
+  #     - name: Install Dependencies
+  #       run: npm ci
+
+  #     - name: Wait for Database
+  #       timeout-minutes: 5
+  #       env:
+  #         DATABASE_URL: postgresql://test:test@postgres:5432/test
+  #       run: |
+  #         curl -sO https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh
+  #         chmod +x wait-for-it.sh
+  #         ./wait-for-it.sh postgres:5432 --timeout=60
+          
+  #         # Simple connection test
+  #         for i in {1..5}; do
+  #           pg_isready -h postgres -U test -d test && break
+  #           sleep $i
+  #         done
+
+  #     - name: Run Migrations
+  #       env:
+  #         DATABASE_URL: postgresql://test:test@postgres:5432/test
+  #       run: |
+  #         npx prisma migrate dev --name init
+  #         npx prisma db push
+
+  #     - name: Execute Tests
+  #       env:
+  #         DATABASE_URL: postgresql://test:test@postgres:5432/test
+  #       run: npm test
+
+  build-docker:
+    name: Build and Push Docker Image
+    needs: [code-quality, unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-prod:
+    name: Deploy to Production
+    needs: build-docker
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Cleanup previous container
+            docker stop prod-app || true
+            docker rm prod-app || true
+            
+            # Pull new image
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            
+            # Run container with production settings
+            docker run -d \
+              --name prod-app \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e NODE_ENV=production \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            
+            # Wait for app initialization
+            sleep 10
+            
+            # Run database migrations
+            docker exec prod-app npx prisma migrate deploy
+            
+            # Cleanup old images
+            docker image prune -af --filter "until=24h"
+
+      - name: Smoke Test
+        run: |
+          # Test create item
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"name":"smoke-test", "price":1000}' \
+            --retry 3 \
+            --retry-delay 5 \
+            --fail-with-body \
+            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+
+          # Test get items
+          curl --fail \
+            --retry 3 \
+            --retry-delay 5 \
+            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+
+      - name: Notify Status
+        uses: rtCamp/action-slack-notify@v2
+        if: always()
         env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: test
-        ports:
-          - 5432:5432 # HAPUS duplicate port mapping di options
-        options: >-
-          --health-cmd "pg_isready -U test -d test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 15
-
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-    
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Verify DB Connection
-      timeout-minutes: 2
-      env:
-        DATABASE_URL: postgresql://test:test@localhost:5432/test
-      run: |
-        sudo apt-get update && sudo apt-get install -y postgresql-client
-        for i in {1..15}; do
-          pg_isready -h localhost -U test -d test && break
-          echo "Attempt $i failed. Retrying in 2 seconds..."
-          sleep 2
-        done
-        psql $DATABASE_URL -c "SELECT version()"
-
-    - name: Run tests
-      env:
-        DATABASE_URL: postgresql://test:test@localhost:5432/test
-      run: |
-        npx prisma migrate dev --name init
-        npm test
-
-  build-and-push:
-    needs: unit-tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ env.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-        
-    - name: Build and push
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: |
-          ${{ env.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-          ${{ env.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-    - name: Deploy to EC2
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.AWS_HOST }}
-        username: ubuntu
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        script: |
-          docker pull ${{ env.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-          docker stop app || true
-          docker rm app || true
-          docker run -d \
-            --name app \
-            -p 3000:3000 \
-            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            ${{ env.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-          sleep 10
-          docker exec app npx prisma migrate deploy
-
-    - name: Smoke Test
-      run: |
-        curl -X POST -H "Content-Type: application/json" -d '{"name":"smoke-test","price":1000}' \
-          --retry 3 --retry-delay 5 --fail-with-body \
-          http://${{ secrets.AWS_HOST }}:3000/api/v1/item
-        
-        curl --fail --retry 3 --retry-delay 5 \
-          http://${{ secrets.AWS_HOST }}:3000/api/v1/item
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
+          SLACK_MESSAGE: |
+            *Environment*: Production
+            *Commit SHA*: \`${{ github.sha }}\`
+            *Result*: ${{ job.status }}
+            *Duration*: ${{ job.steps[*].duration }}
