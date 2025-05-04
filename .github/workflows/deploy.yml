@@ -49,7 +49,7 @@ jobs:
 
       - name: Run Tests
         env:
-          DATABASE_URL: postgresql://test:test@postgres:5432/test
+          DATABASE_URL="${{ secrets.DATABASE_URL }}"
         run: |
           npx prisma migrate deploy
           npm test

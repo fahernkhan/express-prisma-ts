@@ -1,4 +1,4 @@
-name: Enhanced Production Deployment
+name: AWS Production Deployment
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
@@ -37,7 +37,12 @@ jobs:
         run: npm ci
 
       - name: Run Linter
-        run: npm run lint
+        run: |
+          if [ -f package.json ] && grep -q '"lint"' package.json; then
+            npm run lint
+          else
+            echo "No lint script found, skipping linting"
+          fi
 
       - name: Run Security Audit
         run: npm audit --production
@@ -50,7 +55,7 @@ jobs:
           npm test
 
       - name: Upload Coverage Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: coverage/
