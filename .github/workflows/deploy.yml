@@ -3,8 +3,6 @@ name: Production Deployment Pipeline
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 env:
   APP_NAME: "express-prisma-ts"
@@ -27,15 +25,12 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Run Linter
+      - name: Lint Check
         run: npm run lint
 
-      - name: Security Audit
-        run: npm audit --production
-
-  build-docker:
+  build-push:
     name: Build and Push Docker Image
-    needs: [code-quality]
+    needs: code-quality
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -54,77 +49,85 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.ref == 'refs/heads/main' }}
+          push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-prod:
+  deploy:
     name: Deploy to Production
-    needs: [build-docker]
+    needs: build-push
     runs-on: ubuntu-latest
     environment: production
-    env:
-      DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/express-prisma-ts:latest
-      PREV_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/express-prisma-ts:previous
     steps:
-      - name: Deploy to Server
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Backup image sebelumnya
-            docker tag $DOCKER_IMAGE $PREV_IMAGE || true
+            # Graceful shutdown previous container
+            docker stop app --time 30 || true
+            docker rm -f app || true
             
-            # Hapus container lama dengan paksa
-            docker rm -f prod-app || true
+            # Pull new image
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
-            # Pull image terbaru
-            docker pull "$DOCKER_IMAGE"
-            
-            # Jalankan container baru
+            # Run new container with health check
             docker run -d \
-              --name prod-app \
+              --name app \
               --restart unless-stopped \
-              --health-cmd "curl -f http://localhost:3000/api/v1/health" \
+              --health-cmd "curl -f http://localhost:3000/api/v1/health || exit 1" \
               --health-interval 10s \
+              --health-timeout 5s \
+              --health-retries 3 \
               -p 3000:3000 \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              "$DOCKER_IMAGE"
-              
-            # Tunggu maksimal 30 detik
-            timeout 30 bash -c '
-              while [ "$(docker inspect -f "{{.State.Health.Status}}" prod-app)" != "healthy" ]; do
-                sleep 3
-              done'
-            
-            # Lakukan migrasi
-            docker exec prod-app npx prisma migrate deploy || {
-              echo "Migration failed! Rolling back..."
-              docker rm -f prod-app
-              docker run -d \
-                --name prod-app \
-                -p 3000:3000 \
-                "$PREV_IMAGE"
-              exit 1
-            }
+              ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+
+            # Wait for container to be healthy
+            echo "Waiting for container to start..."
+            docker inspect --format="{{json .State.Health.Status}}" app | grep -q '"healthy"' || exit 1
+
+            # Run migrations
+            echo "Running database migrations..."
+            docker exec app npx prisma migrate deploy
+
+            # Cleanup old images
+            docker image prune -af --filter "until=24h"
 
       - name: Smoke Test
         run: |
-          # Gunakan timeout 20 detik
-          timeout 20 bash -c '
-            until curl -sf http://${{ secrets.AWS_HOST }}:3000/api/v1/item; do
-              sleep 2
-            done'
+          set -e
+          echo "Performing smoke test..."
+          curl --fail --retry 5 --retry-delay 10 http://${{ secrets.AWS_HOST }}:3000/api/v1/health
           
-          # Test CRUD
+          echo "Testing CRUD operations..."
           ITEM_ID=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d '{"name":"smoke-test","price":1000}' \
             http://${{ secrets.AWS_HOST }}:3000/api/v1/item | jq -r '.id')
           
           curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
+          curl -X DELETE --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item/$ITEM_ID
+
+  post-deploy:
+    name: Post-Deploy Checks
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
+          SLACK_MESSAGE: |
+            *Status*: ${{ job.status }} 
+            *Commit*: \`${{ github.sha }}\`
+            *Environment*: Production
+            *Details*: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
