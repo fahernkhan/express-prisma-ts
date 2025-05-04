@@ -69,18 +69,18 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Graceful shutdown dengan timeout 30 detik
+            # Graceful shutdown
             docker stop app --timeout 30 || true
             docker rm -f app || true
             
-            # Pull image dengan progress plain
-            docker pull --quiet ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+            # Pull image terbaru
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
-            # Run container dengan health check yang lebih toleran
+            # Run container dengan health check berdasarkan endpoint yang ada
             docker run -d \
               --name app \
               --restart unless-stopped \
-              --health-cmd "curl -sSf http://localhost:3000/api/v1/health >/dev/null || exit 1" \
+              --health-cmd "curl -sSf http://localhost:3000/api/v1/item >/dev/null || exit 1" \
               --health-interval 15s \
               --health-timeout 10s \
               --health-retries 5 \
@@ -88,41 +88,29 @@ jobs:
               -e DATABASE_URL="${{ secrets.DATABASE_URL}}" \
               ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
 
-            # Wait for container dengan retry mechanism
-            echo "Menunggu inisialisasi container..."
+            # Tunggu inisialisasi
+            echo "Menunggu aplikasi siap..."
             timeout 180 bash -c '
               while ! docker inspect --format="{{.State.Health.Status}}" app | grep -q "healthy"; do
                 sleep 10
-                echo "Status kesehatan: $(docker inspect --format="{{.State.Health.Status}}" app)"
+                echo "Status: $(docker inspect --format="{{.State.Health.Status}}" app)"
               done
             ' || exit 1
 
-            # Jalankan migrasi database
+            # Jalankan migrasi
             echo "Menjalankan database migrations..."
-            docker exec app npx prisma migrate deploy --skip-seed
+            docker exec app npx prisma migrate deploy
 
-            # Cleanup dengan safety check
-            docker image prune -af --filter "until=24h" --force
-          timeout: 15m
-
-      - name: Smoke Test
+      - name: API Test
         run: |
           set -e
-          echo "Performing smoke test..."
-          curl --fail --retry 5 --retry-delay 10 http://${{ secrets.AWS_HOST }}:3000/api/v1/health
-          
-          echo "Testing CRUD operations..."
-          # Test sederhana
-          curl -X POST \
-            -H "Content-Type: application/json" \
-            -d '{"name":"smoke-test", "price":1000}' \
-            http://${{ secrets.AWS_HOST }}:3000/api/v1/item
-          
-          curl --fail http://${{ secrets.AWS_HOST }}:3000/api/v1/item || {
-            echo "Smoke test failed! Triggering rollback...";
-            # Panggil API rollback atau trigger manual
-            exit 1;
-          }
+          echo "Testing Create Item..."
+          curl --fail --location "http://${{ secrets.AWS_HOST }}:3000/api/v1/item" \
+            --header "Content-Type: application/json" \
+            --data '{"name":"banana", "price":15000}'
+
+          echo -e "\nTesting Get Items..."
+          curl --fail --location "http://${{ secrets.AWS_HOST }}:3000/api/v1/item"
 
   post-deploy:
     name: Post-Deploy Checks
@@ -139,5 +127,5 @@ jobs:
           SLACK_MESSAGE: |
             *Status*: ${{ job.status }} 
             *Commit*: \`${{ github.sha }}\`
-            *Environment*: Production
+            *API Endpoint*: http://${{ secrets.AWS_HOST }}:3000
             *Details*: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
