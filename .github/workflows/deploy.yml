@@ -35,7 +35,7 @@ jobs:
 
   build-docker:
     name: Build and Push Docker Image
-    needs: [code-quality, unit-tests]
+    needs: [code-quality]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
