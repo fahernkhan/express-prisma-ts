@@ -1,4 +1,4 @@
-name: Production Deployment
+name: Production Deployment Pipeline
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
         run: npm audit --production
 
   unit-tests:
-    name: Unit Tests
+    name: Unit Tests with PostgreSQL
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -47,9 +47,9 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U test -d test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 2s
+          --health-retries 20
 
     steps:
       - name: Checkout Code
@@ -59,21 +59,32 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Install Dependencies
         run: npm ci
 
       - name: Wait for Database
-        timeout-minutes: 2
+        timeout-minutes: 5
+        env:
+          DATABASE_URL: postgresql://test:test@postgres:5432/test
         run: |
-          curl -O https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh
+          curl -sO https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh
           chmod +x wait-for-it.sh
-          ./wait-for-it.sh postgres:5432 --timeout=30
+          ./wait-for-it.sh postgres:5432 --timeout=60
+          
+          # Simple connection test
+          for i in {1..5}; do
+            pg_isready -h postgres -U test -d test && break
+            sleep $i
+          done
 
       - name: Run Migrations
         env:
           DATABASE_URL: postgresql://test:test@postgres:5432/test
-        run: npx prisma migrate dev --name init
+        run: |
+          npx prisma migrate dev --name init
+          npx prisma db push
 
       - name: Execute Tests
         env:
@@ -81,7 +92,7 @@ jobs:
         run: npm test
 
   build-docker:
-    name: Build & Push Image
+    name: Build and Push Docker Image
     needs: [code-quality, unit-tests]
     runs-on: ubuntu-latest
     steps:
@@ -114,50 +125,50 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Deploy to EC2
+      - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Cleanup previous deployment
+            # Cleanup previous container
             docker stop prod-app || true
             docker rm prod-app || true
             
-            # Pull latest image
+            # Pull new image
             docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
-            # Run container
+            # Run container with production settings
             docker run -d \
               --name prod-app \
               --restart unless-stopped \
               -p 3000:3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e NODE_ENV=production \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             
-            # Wait for app to initialize
-            sleep 15
+            # Wait for app initialization
+            sleep 10
             
-            # Run migrations
+            # Run database migrations
             docker exec prod-app npx prisma migrate deploy
             
-            # Cleanup
+            # Cleanup old images
             docker image prune -af --filter "until=24h"
 
       - name: Smoke Test
         run: |
-          # Test CREATE
+          # Test create item
           curl -X POST \
             -H "Content-Type: application/json" \
-            -d '{"name":"ci-test", "price":1000}' \
+            -d '{"name":"smoke-test", "price":1000}' \
             --retry 3 \
             --retry-delay 5 \
             --fail-with-body \
             http://${{ secrets.AWS_HOST }}:3000/api/v1/item
 
-          # Test READ
+          # Test get items
           curl --fail \
             --retry 3 \
             --retry-delay 5 \
@@ -172,6 +183,6 @@ jobs:
           SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
           SLACK_MESSAGE: |
             *Environment*: Production
-            *Commit*: \`${{ github.sha }}\`
+            *Commit SHA*: \`${{ github.sha }}\`
             *Result*: ${{ job.status }}
             *Duration*: ${{ job.steps[*].duration }}
