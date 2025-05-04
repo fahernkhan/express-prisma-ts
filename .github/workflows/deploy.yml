@@ -67,8 +67,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      DOCKER_IMAGE: ${{ format('{0}/{1}:latest', secrets.DOCKERHUB_USERNAME, env.APP_NAME) }}
-      PREV_IMAGE: ${{ format('{0}/{1}:previous', secrets.DOCKERHUB_USERNAME, env.APP_NAME) }}
+      DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/express-prisma-ts:latest
+      PREV_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/express-prisma-ts:previous
     steps:
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
