@@ -118,20 +118,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Calculate metrics
-        id: duration
+        id: metrics
         run: |
-          # Dapatkan waktu mulai job deploy (bukan seluruh workflow)
+          # Get deploy job start time
           DEPLOY_JOB_STARTED=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
             | jq -r '.jobs[] | select(.name == "Deploy to Production") | .started_at')
           
-          # Konversi ke timestamp
+          # Convert to timestamp
           START_TS=$(date -d "$DEPLOY_JOB_STARTED" +%s)
           END_TS=$(date +%s)
           
-          # Hitung durasi dalam menit
-          DURATION=$(( (END_TS - START_TS) / 60 ))
-          echo "DURATION=$DURATION" >> $GITHUB_ENV
+          # Calculate duration
+          DURATION_SEC=$(( END_TS - START_TS ))
+          DURATION_MIN=$(( DURATION_SEC / 60 ))
+          DURATION_REMAINING_SEC=$(( DURATION_SEC % 60 ))
+          
+          # Format start time
+          START_TIME_READABLE=$(date -d "@$START_TS" +"%d %b %Y %H:%M UTC")
+          
+          # Version info
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          VERSION="$(date -u +'%Y.%m.%d').${{ github.run_number }}"
+          
+          echo "DURATION_TEXT=${DURATION_MIN}m ${DURATION_REMAINING_SEC}s" >> $GITHUB_ENV
+          echo "START_TIME=${START_TIME_READABLE}" >> $GITHUB_ENV
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Slack Notification
         uses: rtCamp/action-slack-notify@v2
@@ -142,21 +155,21 @@ jobs:
           SLACK_ICON_EMOJI: ':rocket:'
           SLACK_COLOR: ${{ job.status == 'success' && '#34A853' || '#EA4335' }}
           SLACK_MESSAGE: |
-            🚀 *DEPLOYMENT REPORT* 🚀
+            🚀 *LAPORAN DEPLOYMENT* 🚀
             
-            *Aplikasi*: ${{ env.APP_NAME }}
-            *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
-            *Status*: ${{ job.status == 'success' && 'BERHASIL ✅' || 'GAGAL ❌' }}
-            *Durasi*: ${{ env.DURATION }} menit
-            *Waktu Mulai*: $(date -d "@$START_TS" +"%d %b %Y %H:%M")
-            🚩 *Environment*: Production
+            📌 *Aplikasi*: ${{ env.APP_NAME }}
+            🏷️ *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
+            ✅ *Status*: ${{ job.status == 'success' && 'BERHASIL' || 'GAGAL' }} ${{ job.status == 'success' && '✅' || '❌' }}
+            ⏱ *Durasi*: ${{ env.DURATION_TEXT }}
+            🕒 *Mulai*: ${{ env.START_TIME }}
+            🌐 *Environment*: Production
             
-            *Perubahan Terbaru*:
+            📝 *Perubahan Terakhir*:
             "${{ github.event.head_commit.message }}"
             
-            *Link Penting*:
-            🔗 <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Detail Kode>
-            🌍 <http://${{ secrets.AWS_HOST }}:3000|Akses Aplikasi>
-            📈 <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Laporan Deployment>
+            🔗 *Link Penting*:
+            - <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Detail Kode>
+            - <http://${{ secrets.AWS_HOST }}:3000|Akses Aplikasi>
+            - <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Log Deployment>
             
-            _Deployed by ${{ github.actor }} via GitHub Actions_
+            _Dideploy oleh ${{ github.actor }} via GitHub Actions_
