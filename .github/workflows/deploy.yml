@@ -117,41 +117,40 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Calculate duration
-        id: duration
+      - name: Calculate metrics durations
+        id: metrics-durations 
         run: |
           # Hitung durasi dalam menit
-          START_TIME=${{ github.run_started_at }}
-          CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          START_TS=$(date -d "${{ github.run_started_at }}" +%s)
+          END_TS=$(date -u +%s)
+          echo "DURATION_MIN=$(( (END_TS - START_TS) / 60 ))" >> $GITHUB_ENV
           
-          # Konversi ke timestamp Unix
-          START_TS=$(date -d "$START_TIME" +%s)
-          END_TS=$(date -d "$CURRENT_TIME" +%s)
-          
-          # Hitung durasi dalam menit
-          DURATION_MIN=$(( (END_TS - START_TS) / 60 ))
-          echo "DURATION_MIN=$DURATION_MIN" >> $GITHUB_ENV
+          # Generate version info
+          echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> $GITHUB_ENV
+          echo "VERSION=$(date -u +'%Y.%m.%d').${{ github.run_number }}" >> $GITHUB_ENV
 
-      - name: Human-Friendly Slack Notification
+      - name: Slack Notification
         uses: rtCamp/action-slack-notify@v2
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           SLACK_USERNAME: 'Deployment Alert 🚨'
-          SLACK_ICON_EMOJI: ':package:'
-          SLACK_COLOR: ${{ job.status == 'success' && '#00C853' || '#D50000' }}
+          SLACK_ICON_EMOJI: ':rocket:'
+          SLACK_COLOR: ${{ job.status == 'success' && '#34A853' || '#EA4335' }}
           SLACK_MESSAGE: |
-            🚀 *UPDATE APLIKASI PRODUCTION* 🚀
+            🚀 *UPDATE PRODUKSI* 🚀
             
             *Aplikasi*: ${{ env.APP_NAME }}
+            *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
             *Status*: ${{ job.status == 'success' && 'BERHASIL ✅' || 'GAGAL ❌' }}
             *Durasi*: ${{ env.DURATION_MIN }} menit
-            *Versi*: ${GITHUB_SHA:0:7}
             
-            *Perubahan Terakhir*:
+            *Perubahan Terbaru*:
             "${{ github.event.head_commit.message }}"
             
             *Link Penting*:
-            🔗 <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Lihat Perubahan Kode>
-            🌐 <http://${{ secrets.AWS_HOST }}:3000|Buka Aplikasi>
-            📊 <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Detail Deployment>
+            🔗 <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Detail Kode (${{ env.SHORT_SHA }})>
+            🌍 <http://${{ secrets.AWS_HOST }}:3000|Akses Aplikasi>
+            📈 <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Laporan Deployment>
+            
+            _Deployed by ${{ github.actor }} via GitHub Actions_

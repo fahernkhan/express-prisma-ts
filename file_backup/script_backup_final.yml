@@ -206,6 +206,10 @@ jobs:
           SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
           SLACK_MESSAGE: |
             *Environment*: Production
+            *Status*: ${{ job.status }} 
             *Commit SHA*: \`${{ github.sha }}\`
             *Result*: ${{ job.status }}
             *Duration*: ${{ job.steps[*].duration }}
+            *API Endpoint*: http://${{ secrets.AWS_HOST }}:3000
+            *Details*: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
