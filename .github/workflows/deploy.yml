@@ -117,33 +117,37 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Calculate metrics durations
-        id: metrics-durations 
+      - name: Calculate metrics
+        id: metrics
         run: |
-          # Hitung durasi dalam menit
-          START_TS=$(date -d "${{ github.run_started_at }}" +%s)
-          END_TS=$(date -u +%s)
-          echo "DURATION_MIN=$(( (END_TS - START_TS) / 60 ))" >> $GITHUB_ENV
+          # Hitung durasi job ini saja
+          START_TS=${{ steps.metrics.outputs.start_time }}
+          END_TS=$(date +%s)
+          echo "DURATION_SEC=$(( END_TS - START_TS ))" >> $GITHUB_ENV
+          echo "DURATION_MIN=$(( (END_TS - START_TS + 30) / 60 ))" >> $GITHUB_ENV
           
           # Generate version info
           echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> $GITHUB_ENV
           echo "VERSION=$(date -u +'%Y.%m.%d').${{ github.run_number }}" >> $GITHUB_ENV
+        env:
+          START_TIME: ${{ steps.get_time.outputs.start_time }}
+
+      - name: Get start time
+        id: get_time
+        run: echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
 
       - name: Slack Notification
         uses: rtCamp/action-slack-notify@v2
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_USERNAME: 'Deployment Alert 🚨'
-          SLACK_ICON_EMOJI: ':rocket:'
-          SLACK_COLOR: ${{ job.status == 'success' && '#34A853' || '#EA4335' }}
           SLACK_MESSAGE: |
             🚀 *UPDATE PRODUKSI* 🚀
             
             *Aplikasi*: ${{ env.APP_NAME }}
             *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
             *Status*: ${{ job.status == 'success' && 'BERHASIL ✅' || 'GAGAL ❌' }}
-            *Durasi*: ${{ env.DURATION_MIN }} menit
+            *Durasi*: ${{ env.DURATION_SEC }} detik (~${{ env.DURATION_MIN }} menit)
             
             *Perubahan Terbaru*:
             "${{ github.event.head_commit.message }}"
@@ -151,6 +155,5 @@ jobs:
             *Link Penting*:
             🔗 <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Detail Kode (${{ env.SHORT_SHA }})>
             🌍 <http://${{ secrets.AWS_HOST }}:3000|Akses Aplikasi>
-            📈 <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Laporan Deployment>
             
             _Deployed by ${{ github.actor }} via GitHub Actions_
