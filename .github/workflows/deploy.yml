@@ -118,24 +118,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Calculate metrics
-        id: metrics
+        id: duration
         run: |
-          # Hitung durasi workflow sebenarnya
-          START_TS=${{ github.run_started_at }}
-          NOW_TS=$(date -u +%s)
-          RUN_START_TS=$(date -d "${START_TS}" +%s)
-          DURATION=$(( NOW_TS - RUN_START_TS ))
+          # Dapatkan waktu mulai job deploy (bukan seluruh workflow)
+          DEPLOY_JOB_STARTED=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+            | jq -r '.jobs[] | select(.name == "Deploy to Production") | .started_at')
           
-          # Konversi ke menit dengan pembulatan
-          DURATION_MIN=$(( (DURATION + 30) / 60 ))
+          # Konversi ke timestamp
+          START_TS=$(date -d "$DEPLOY_JOB_STARTED" +%s)
+          END_TS=$(date +%s)
           
-          # Generate version info
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          VERSION="$(date -u +'%Y.%m.%d').${GITHUB_RUN_NUMBER}"
-          
-          echo "DURATION_MIN=${DURATION_MIN}" >> $GITHUB_ENV
-          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          # Hitung durasi dalam menit
+          DURATION=$(( (END_TS - START_TS) / 60 ))
+          echo "DURATION=$DURATION" >> $GITHUB_ENV
 
       - name: Slack Notification
         uses: rtCamp/action-slack-notify@v2
@@ -146,12 +142,14 @@ jobs:
           SLACK_ICON_EMOJI: ':rocket:'
           SLACK_COLOR: ${{ job.status == 'success' && '#34A853' || '#EA4335' }}
           SLACK_MESSAGE: |
-            🚀 *UPDATE PRODUKSI* 🚀
+            🚀 *DEPLOYMENT REPORT* 🚀
             
             *Aplikasi*: ${{ env.APP_NAME }}
             *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
             *Status*: ${{ job.status == 'success' && 'BERHASIL ✅' || 'GAGAL ❌' }}
-            *Durasi*: ${{ env.DURATION_MIN }} menit
+            *Durasi*: ${{ env.DURATION }} menit
+            *Waktu Mulai*: $(date -d "@$START_TS" +"%d %b %Y %H:%M")
+            🚩 *Environment*: Production
             
             *Perubahan Terbaru*:
             "${{ github.event.head_commit.message }}"
