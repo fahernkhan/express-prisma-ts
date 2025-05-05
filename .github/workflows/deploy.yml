@@ -122,10 +122,12 @@ jobs:
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_USERNAME: 'GitHub Actions'
           SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
           SLACK_MESSAGE: |
             *Status*: ${{ job.status }} 
             *Commit*: \`${{ github.sha }}\`
+            *Environment*: Production
             *API Endpoint*: http://${{ secrets.AWS_HOST }}:3000
-            *Details*: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            *Details*: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
