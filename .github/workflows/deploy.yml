@@ -135,7 +135,7 @@ jobs:
           DURATION_REMAINING_SEC=$(( DURATION_SEC % 60 ))
           
           # Format start time
-          START_TIME_READABLE=$(date -d "@$START_TS" +"%d %b %Y %H:%M UTC")
+          START_TIME_READABLE=$(date -d "@$START_TS" +"%d %b %Y %H:%M WIB")
           
           # Version info
           SHORT_SHA="${GITHUB_SHA:0:7}"
@@ -160,7 +160,7 @@ jobs:
             📌 *Aplikasi*: ${{ env.APP_NAME }}
             🏷️ *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
             ✅ *Status*: ${{ job.status == 'success' && 'BERHASIL' || 'GAGAL' }} ${{ job.status == 'success' && '✅' || '❌' }}
-            ⏱ *Durasi*: ${{ env.DURATION_TEXT }}
+            ⏱ *Durasi Deployment*: ${{ env.DURATION_TEXT }}
             🕒 *Mulai*: ${{ env.START_TIME }}
             🌐 *Environment*: Production
             
