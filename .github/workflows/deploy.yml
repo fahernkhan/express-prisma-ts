@@ -117,89 +117,41 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Slack Notification
+      - name: Calculate duration
+        id: duration
+        run: |
+          # Hitung durasi dalam menit
+          START_TIME=${{ github.run_started_at }}
+          CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Konversi ke timestamp Unix
+          START_TS=$(date -d "$START_TIME" +%s)
+          END_TS=$(date -d "$CURRENT_TIME" +%s)
+          
+          # Hitung durasi dalam menit
+          DURATION_MIN=$(( (END_TS - START_TS) / 60 ))
+          echo "DURATION_MIN=$DURATION_MIN" >> $GITHUB_ENV
+
+      - name: Human-Friendly Slack Notification
         uses: rtCamp/action-slack-notify@v2
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_USERNAME: 'Deploy Bot 🤖'
-          SLACK_ICON_EMOJI: ':github:'
-          SLACK_COLOR: ${{ job.status == 'success' && '#36a64f' || '#ff0000' }}
+          SLACK_USERNAME: 'Deployment Alert 🚨'
+          SLACK_ICON_EMOJI: ':package:'
+          SLACK_COLOR: ${{ job.status == 'success' && '#00C853' || '#D50000' }}
           SLACK_MESSAGE: |
-            {
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "🚀 Deployment Notification",
-                    "emoji": true
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Project:*\n${{ env.APP_NAME }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Environment:*\nProduction"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Status:*\n${{ job.status }} ${{ job.status == 'success' && '✅' || '❌' }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Duration:*\n${{ job.steps[*].duration }}"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Commit:*\n<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{
-                      github.sha
-                    }}> - ${{ github.event.head_commit.message }}"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Deployed By:*\n${{ github.actor }}"
-                  }
-                },
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "View Workflow",
-                        "emoji": true
-                      },
-                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    },
-                    {
-                      "type": "button",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "API Endpoint",
-                        "emoji": true
-                      },
-                      "url": "http://${{ secrets.AWS_HOST }}:3000"
-                    }
-                  ]
-                }
-              ]
-            }
+            🚀 *UPDATE APLIKASI PRODUCTION* 🚀
+            
+            *Aplikasi*: ${{ env.APP_NAME }}
+            *Status*: ${{ job.status == 'success' && 'BERHASIL ✅' || 'GAGAL ❌' }}
+            *Durasi*: ${{ env.DURATION_MIN }} menit
+            *Versi*: ${GITHUB_SHA:0:7}
+            
+            *Perubahan Terakhir*:
+            "${{ github.event.head_commit.message }}"
+            
+            *Link Penting*:
+            🔗 <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Lihat Perubahan Kode>
+            🌐 <http://${{ secrets.AWS_HOST }}:3000|Buka Aplikasi>
+            📊 <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Detail Deployment>
