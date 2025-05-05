@@ -122,12 +122,84 @@ jobs:
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_USERNAME: 'GitHub Actions'
-          SLACK_TITLE: "Deployment Status - ${{ env.APP_NAME }}"
+          SLACK_USERNAME: 'Deploy Bot 🤖'
+          SLACK_ICON_EMOJI: ':github:'
+          SLACK_COLOR: ${{ job.status == 'success' && '#36a64f' || '#ff0000' }}
           SLACK_MESSAGE: |
-            *Status*: ${{ job.status }} 
-            *Commit*: \`${{ github.sha }}\`
-            *Environment*: Production
-            *API Endpoint*: http://${{ secrets.AWS_HOST }}:3000
-            *Details*: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>
-          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🚀 Deployment Notification",
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Project:*\n${{ env.APP_NAME }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\nProduction"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ job.status }} ${{ job.status == 'success' && '✅' || '❌' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Duration:*\n${{ job.steps[*].duration }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Commit:*\n<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{
+                      github.sha
+                    }}> - ${{ github.event.head_commit.message }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Deployed By:*\n${{ github.actor }}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow",
+                        "emoji": true
+                      },
+                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    },
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "API Endpoint",
+                        "emoji": true
+                      },
+                      "url": "http://${{ secrets.AWS_HOST }}:3000"
+                    }
+                  ]
+                }
+              ]
+            }
