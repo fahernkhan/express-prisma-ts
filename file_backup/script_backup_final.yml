@@ -213,3 +213,81 @@ jobs:
             *API Endpoint*: http://${{ secrets.AWS_HOST }}:3000
             *Details*: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>
           SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+
+  post-deploy:
+    name: Post-Deploy Checks
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calculate metrics
+        id: metrics
+        run: |
+          # Get workflow timestamps
+          WORKFLOW_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+          
+          # Calculate total duration
+          CREATED_AT=$(jq -r '.created_at' <<< "$WORKFLOW_DATA")
+          UPDATED_AT=$(jq -r '.updated_at' <<< "$WORKFLOW_DATA")
+          START_TS=$(date -d "$CREATED_AT" +%s)
+          END_TS=$(date -d "$UPDATED_AT" +%s)
+          TOTAL_DURATION=$(( END_TS - START_TS ))
+          
+          # Get all jobs data
+          JOBS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs")
+          
+          # Function to calculate job duration
+          calculate_job_duration() {
+            local job_name=$1
+            local job=$(jq -r --arg name "$job_name" '.jobs[] | select(.name == $name)' <<< "$JOBS_DATA")
+            local start=$(date -d "$(jq -r '.started_at' <<< "$job")" +%s)
+            local end=$(date -d "$(jq -r '.completed_at' <<< "$job")" +%s)
+            echo $(( end - start ))
+          }
+          
+          # Get durations for each job
+          CODE_QUALITY_DURATION=$(calculate_job_duration "Code Quality Checks")
+          BUILD_PUSH_DURATION=$(calculate_job_duration "Build and Push Docker Image")
+          DEPLOY_DURATION=$(calculate_job_duration "Deploy to Production")
+          POST_DEPLOY_DURATION=$(calculate_job_duration "Post-Deploy Checks")
+          
+          # Format durations
+          format_duration() {
+            local seconds=$1
+            printf "%dm %ds" $((seconds/60)) $((seconds%60))
+          }
+          
+          echo "TOTAL_DURATION=$(format_duration $TOTAL_DURATION)" >> $GITHUB_ENV
+          echo "CODE_QUALITY_DURATION=$(format_duration $CODE_QUALITY_DURATION)" >> $GITHUB_ENV
+          echo "BUILD_PUSH_DURATION=$(format_duration $BUILD_PUSH_DURATION)" >> $GITHUB_ENV
+          echo "DEPLOY_DURATION=$(format_duration $DEPLOY_DURATION)" >> $GITHUB_ENV
+          echo "POST_DEPLOY_DURATION=$(format_duration $POST_DEPLOY_DURATION)" >> $GITHUB_ENV
+
+      - name: Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_MESSAGE: |
+            🚀 *LAPORAN DEPLOYMENT* 🚀
+            
+            📌 *Aplikasi*: ${{ env.APP_NAME }}
+            ⏱ *Total Durasi*: ${{ env.TOTAL_DURATION }}
+            
+            📊 *Detail Durasi*:
+            - Code Quality: ${{ env.CODE_QUALITY_DURATION }}
+            - Build & Push: ${{ env.BUILD_PUSH_DURATION }}
+            - Deployment: ${{ env.DEPLOY_DURATION }}
+            - Post-Deploy: ${{ env.POST_DEPLOY_DURATION }}
+            
+            🏷️ *Versi*: $(date -u +'%Y.%m.%d').${{ github.run_number }} (${GITHUB_SHA:0:7})
+            🕒 *Waktu Mulai*: $(date -d "@$START_TS" +"%d %b %Y %H:%M WIB")
+            
+            📝 *Perubahan Terakhir*:
+            "${{ github.event.head_commit.message }}"
+            
+            🔗 *Link Penting*:
+            - <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Detail Kode>
+            - <http://${{ secrets.AWS_HOST }}:3000|Akses Aplikasi>
+            
+            _Dideploy oleh ${{ github.actor }} via GitHub Actions_

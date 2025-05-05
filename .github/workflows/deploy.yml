@@ -160,7 +160,6 @@ jobs:
             📌 *Aplikasi*: ${{ env.APP_NAME }}
             🏷️ *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
             ✅ *Status*: ${{ job.status == 'success' && 'BERHASIL' || 'GAGAL' }} ${{ job.status == 'success' && '✅' || '❌' }}
-            ⏱ *Durasi stage Deployment*: ${{ env.DURATION_TEXT }}
             🕒 *Mulai*: ${{ env.START_TIME }}
             🌐 *Environment*: Production
             
