@@ -53,6 +53,7 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -69,14 +70,14 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Graceful shutdown
+            # Graceful shutdown container sebelumnya
             docker stop app --timeout 30 || true
             docker rm -f app || true
-            
-            # Pull image terbaru
+
+            echo "🚀 Menarik image terbaru..."
             docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-            
-            # Run container dengan health check berdasarkan endpoint yang ada
+
+            echo "🟢 Menjalankan container dengan healthcheck..."
             docker run -d \
               --name app \
               --restart unless-stopped \
@@ -85,21 +86,33 @@ jobs:
               --health-timeout 10s \
               --health-retries 5 \
               -p 3000:3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL}}" \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
 
-            # Tunggu inisialisasi
-            echo "Menunggu aplikasi siap..."
-            timeout 180 bash -c '
+            echo "⏳ Menunggu aplikasi healthy..."
+            if timeout 180 bash -c '
               while ! docker inspect --format="{{.State.Health.Status}}" app | grep -q "healthy"; do
                 sleep 10
                 echo "Status: $(docker inspect --format="{{.State.Health.Status}}" app)"
               done
-            ' || exit 1
+            '; then
+              echo "✅ App is healthy. Menjalankan migrasi database..."
+              docker exec app npx prisma migrate deploy
+            else
+              echo "❌ Aplikasi gagal sehat. Melakukan rollback..."
+              docker stop app || true
+              docker rm -f app || true
 
-            # Run Migrations
-            echo "Menjalankan database migrations..."
-            docker exec app npx prisma migrate deploy
+              echo "🔁 Menjalankan image sebelumnya (rollback)..."
+              docker run -d \
+                --name app \
+                --restart unless-stopped \
+                -p 3000:3000 \
+                -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+                ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
+
+              exit 1
+            fi
 
       - name: API Test
         run: |
