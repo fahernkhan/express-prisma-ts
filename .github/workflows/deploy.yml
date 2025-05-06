@@ -45,6 +45,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Pull current latest and tag as previous
+        run: |
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest || exit 0
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest \
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
+
       - name: Build and Push
         uses: docker/build-push-action@v5
         with:
@@ -53,7 +60,6 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
