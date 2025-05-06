@@ -97,7 +97,7 @@ jobs:
               done
             ' || exit 1
 
-            # Jalankan migrasi
+            # Run Migrations
             echo "Menjalankan database migrations..."
             docker exec app npx prisma migrate deploy
 

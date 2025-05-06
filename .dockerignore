@@ -1,7 +1,42 @@
+# Node modules (handled in build stage)
 node_modules
-npm-debug.log
+
+# Environment variable files (keep secrets out of image)
 .env
-.git
-dist
+.env.* 
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# Git files
+.git/
+.gitignore
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Coverage and test output
+coverage/
+jest-coverage/
+
+# Optional: Prisma artifacts (generated in Docker build)
+prisma/dev.db
+prisma/migrations/dev/
+
+# Optional: Docker-related
 Dockerfile
-.dockerignore
+docker-compose.yml
+
+# Avoid copying everything again
+dist/
+
+.qodo

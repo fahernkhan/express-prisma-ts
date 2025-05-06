@@ -1,9 +1,9 @@
 # Stage 1: Build
 FROM node:20-alpine AS builder
 
-# Install system dependencies untuk Prisma
-RUN apk add --no-cache openssl python3 make g++
-RUN npm install -g npm@latest
+# Install system dependencies for Prisma
+RUN apk add --no-cache openssl python3 make g++ \
+  && npm install -g npm@latest
 
 
 WORKDIR /app
@@ -25,7 +25,7 @@ RUN npm run build
 FROM node:20-alpine
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl postgresql-client
 
 WORKDIR /app
 
@@ -34,7 +34,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
 
-# Healthcheck untuk memastikan koneksi database
+# Healthcheck mechanism to ensure database connection
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
   CMD psql "$DATABASE_URL" -c "SELECT 1"
 
