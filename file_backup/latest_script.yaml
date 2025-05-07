@@ -76,14 +76,14 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Gracefully shutdown previous container
+            # Graceful shutdown container sebelumnya
             docker stop app --timeout 30 || true
             docker rm -f app || true
 
-            echo "Pulling latest image..."
+            echo "🚀 Menarik image terbaru..."
             docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
 
-            echo "Starting container with healthcheck..."
+            echo "🟢 Menjalankan container dengan healthcheck..."
             docker run -d \
               --name app \
               --restart unless-stopped \
@@ -95,21 +95,21 @@ jobs:
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
 
-            echo "Waiting for application to become healthy..."
+            echo "⏳ Menunggu aplikasi healthy..."
             if timeout 180 bash -c '
               while ! docker inspect --format="{{.State.Health.Status}}" app | grep -q "healthy"; do
                 sleep 10
                 echo "Status: $(docker inspect --format="{{.State.Health.Status}}" app)"
               done
             '; then
-              echo "App is healthy. Running database migrations..."
+              echo "✅ App is healthy. Menjalankan migrasi database..."
               docker exec app npx prisma migrate deploy
             else
-              echo "Application failed health check. Performing rollback..."
+              echo "❌ Aplikasi gagal sehat. Melakukan rollback..."
               docker stop app || true
               docker rm -f app || true
 
-              echo "Running previous image (rollback)..."
+              echo "🔁 Menjalankan image sebelumnya (rollback)..."
               docker run -d \
                 --name app \
                 --restart unless-stopped \
@@ -170,24 +170,24 @@ jobs:
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_USERNAME: 'Deployment Alert'
+          SLACK_USERNAME: 'Deployment Alert 🚨'
           SLACK_ICON_EMOJI: ':rocket:'
           SLACK_COLOR: ${{ job.status == 'success' && '#34A853' || '#EA4335' }}
           SLACK_MESSAGE: |
-            *DEPLOYMENT REPORT*
+            🚀 *LAPORAN DEPLOYMENT* 🚀
             
-            *Application*: ${{ env.APP_NAME }}
-            *Version*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
-            *Status*: ${{ job.status == 'success' && 'SUCCESS' || 'FAILED' }} ${{ job.status == 'success' && '✅' || '❌' }}
-            *Start Time*: ${{ env.START_TIME }}
-            *Environment*: Production
+            📌 *Aplikasi*: ${{ env.APP_NAME }}
+            🏷️ *Versi*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
+            ✅ *Status*: ${{ job.status == 'success' && 'BERHASIL' || 'GAGAL' }} ${{ job.status == 'success' && '✅' || '❌' }}
+            🕒 *Mulai*: ${{ env.START_TIME }}
+            🌐 *Environment*: Production
             
-            *Latest Changes*:
+            📝 *Perubahan Terakhir*:
             "${{ github.event.head_commit.message }}"
             
-            *Important Links*:
-            - <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Code Details>
-            - <http://${{ secrets.AWS_HOST }}:3000|Access Application>
-            - <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Deployment Log>
+            🔗 *Link Penting*:
+            - <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Detail Kode>
+            - <http://${{ secrets.AWS_HOST }}:3000|Akses Aplikasi>
+            - <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Log Deployment>
             
-            _Deployed by ${{ github.actor }} via GitHub Actions_
+            _Dideploy oleh ${{ github.actor }} via GitHub Actions_
