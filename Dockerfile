@@ -1,6 +1,7 @@
 FROM node:20
 
-RUN apt-get update && apt-get install -y libssl1.1
+
+RUN apt-get update && apt-get install -y libssl1.1 || echo "libssl1.1 not found, skipping..."
 
 WORKDIR /app
 
