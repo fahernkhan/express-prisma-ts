@@ -62,8 +62,11 @@ jobs:
           NODE_ENV=production
           PORT=3000
           EOL
-          docker compose -f docker-compose.prod.yml pull
-          docker compose -f docker-compose.prod.yml down
-          docker compose -f docker-compose.prod.yml up -d
+          
+          # Perintah yang diperbaiki
+          docker-compose -f docker-compose.prod.yml pull 
+          docker-compose -f docker-compose.prod.yml down
+          docker-compose -f docker-compose.prod.yml up -d
+          sleep 10 
           docker exec express-prisma-app npx prisma migrate deploy
           EOF

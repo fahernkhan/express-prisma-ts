@@ -106,3 +106,22 @@ tar xzf ./actions-runner-linux-x64-2.319.0.tar.gz
 sudo ./svc.sh install
 sudo ./svc.sh start
 
+sudo apt update
+sudo apt install docker-compose-plugin
+
+cd /app
+cat .env
+docker-compose -f docker-compose.prod.yml config
+docker-compose -f docker-compose.prod.yml up
+
+# Cek versi docker compose
+docker-compose --version
+
+# Cek container
+docker ps
+
+# Cek logs
+docker logs express-prisma-app
+
+# Test koneksi database
+docker exec postgres psql -U your_user -d your_db -c "\dt"
