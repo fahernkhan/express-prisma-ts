@@ -60,3 +60,32 @@ EC2_USER           : User EC2 (biasanya 'ubuntu')
 DB_NAME            : Nama database
 DB_USER            : User database
 DB_PASSWORD        : Password database
+
+
+####
+# Cek container
+docker ps
+
+# Cek logs aplikasi
+docker logs app
+
+# Cek koneksi database
+docker exec postgres psql -U your_user -d your_db -c "\dt"
+
+# Test API
+curl http://localhost:3000/api/v1/item
+
+
+
+
+
+
+####
+# Cek folder /app
+ls -la /app
+
+# Cek permission docker
+docker ps
+
+# Cek environment variables
+cat /app/.env
