@@ -89,3 +89,20 @@ docker ps
 
 # Cek environment variables
 cat /app/.env
+
+git commit --allow-empty -m "CI/CD"
+
+# Masuk ke EC2 via SSH
+ssh -i your-key.pem ubuntu@ec2-ip
+
+# Download runner
+mkdir actions-runner && cd actions-runner
+curl -o actions-runner-linux-x64-2.319.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.319.0/actions-runner-linux-x64-2.319.0.tar.gz
+tar xzf ./actions-runner-linux-x64-2.319.0.tar.gz
+
+# Konfigurasi
+./config.sh --url https://github.com/username/repo-name --token YOUR_GITHUB_TOKEN
+
+sudo ./svc.sh install
+sudo ./svc.sh start
+
