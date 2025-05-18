@@ -1,193 +1,59 @@
-name: Production Deployment Pipeline
+name: Deploy Express + Prisma
 
 on:
   push:
-    branches: [main]
-
-env:
-  APP_NAME: "express-prisma-ts"
-  DOCKER_REGISTRY: "docker.io"
+    branches: [ master ]
 
 jobs:
-  code-quality:
-    name: Code Quality Checks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Lint Check
-        run: npm run lint
-
   build-push:
-    name: Build and Push Docker Image
-    needs: code-quality
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Pull current latest and tag as previous
-        run: |
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest || exit 0
-          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest \
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
-
-      - name: Build and Push
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ secrets.DOCKER_USERNAME }}/express-prisma-app:latest
 
   deploy:
-    name: Deploy to Production
-    needs: build-push
-    runs-on: ubuntu-latest
-    environment: production
+    runs-on: self-hosted
+    needs: [build-push]
     steps:
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.AWS_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            # Gracefully shutdown previous container
-            docker stop app --timeout 30 || true
-            docker rm -f app || true
-
-            echo "Pulling latest image..."
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-
-            echo "Starting container with healthcheck..."
-            docker run -d \
-              --name app \
-              --restart unless-stopped \
-              --health-cmd "curl -sSf http://localhost:3000/api/v1/item >/dev/null || exit 1" \
-              --health-interval 15s \
-              --health-timeout 10s \
-              --health-retries 5 \
-              -p 3000:3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-
-            echo "Waiting for application to become healthy..."
-            if timeout 180 bash -c '
-              while ! docker inspect --format="{{.State.Health.Status}}" app | grep -q "healthy"; do
-                sleep 10
-                echo "Status: $(docker inspect --format="{{.State.Health.Status}}" app)"
-              done
-            '; then
-              echo "App is healthy. Running database migrations..."
-              docker exec app npx prisma migrate deploy
-            else
-              echo "Application failed health check. Performing rollback..."
-              docker stop app || true
-              docker rm -f app || true
-
-              echo "Running previous image (rollback)..."
-              docker run -d \
-                --name app \
-                --restart unless-stopped \
-                -p 3000:3000 \
-                -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-                ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:previous
-
-              exit 1
-            fi
-
-      - name: API Test
+      - name: Prepare SSH
         run: |
-          set -e
-          echo "Testing Create Item..."
-          curl --fail --location "http://${{ secrets.AWS_HOST }}:3000/api/v1/item" \
-            --header "Content-Type: application/json" \
-            --data '{"name":"banana", "price":15000}'
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
 
-          echo -e "\nTesting Get Items..."
-          curl --fail --location "http://${{ secrets.AWS_HOST }}:3000/api/v1/item"
-
-  post-deploy:
-    name: Post-Deploy Checks
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Calculate metrics
-        id: metrics
+      - name: Transfer files
         run: |
-          # Get deploy job start time
-          DEPLOY_JOB_STARTED=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
-            | jq -r '.jobs[] | select(.name == "Deploy to Production") | .started_at')
-          
-          # Convert to timestamp
-          START_TS=$(date -d "$DEPLOY_JOB_STARTED" +%s)
-          END_TS=$(date +%s)
-          
-          # Calculate duration
-          DURATION_SEC=$(( END_TS - START_TS ))
-          DURATION_MIN=$(( DURATION_SEC / 60 ))
-          DURATION_REMAINING_SEC=$(( DURATION_SEC % 60 ))
-          
-          # Format start time
-          START_TIME_READABLE=$(TZ="Asia/Jakarta" date -d "@$START_TS" +"%d %b %Y %H:%M WIB")
-          
-          # Version info
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          VERSION="$(date -u +'%Y.%m.%d').${{ github.run_number }}"
-          
-          echo "DURATION_TEXT=${DURATION_MIN}m ${DURATION_REMAINING_SEC}s" >> $GITHUB_ENV
-          echo "START_TIME=${START_TIME_READABLE}" >> $GITHUB_ENV
-          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          scp -i ~/.ssh/ec2_key \
+            -o StrictHostKeyChecking=no \
+            docker-compose.prod.yml \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/app/
 
-      - name: Slack Notification
-        uses: rtCamp/action-slack-notify@v2
-        if: always()
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_USERNAME: 'Deployment Alert'
-          SLACK_ICON_EMOJI: ':rocket:'
-          SLACK_COLOR: ${{ job.status == 'success' && '#34A853' || '#EA4335' }}
-          SLACK_MESSAGE: |
-            *DEPLOYMENT REPORT*
-            
-            *Application*: ${{ env.APP_NAME }}
-            *Version*: ${{ env.VERSION }} (${{ env.SHORT_SHA }})
-            *Status*: ${{ job.status == 'success' && 'SUCCESS' || 'FAILED' }} ${{ job.status == 'success' && '✅' || '❌' }}
-            *Start Time*: ${{ env.START_TIME }}
-            *Environment*: Production
-            
-            *Latest Changes*:
-            "${{ github.event.head_commit.message }}"
-            
-            *Important Links*:
-            - <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|Code Details>
-            - <http://${{ secrets.AWS_HOST }}:3000|Access Application>
-            - <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|Deployment Log>
-            
-            _Deployed by ${{ github.actor }} via GitHub Actions_
+      - name: Execute deployment
+        run: |
+          ssh -i ~/.ssh/ec2_key \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} <<EOF
+          cd /app
+          echo "DATABASE_URL=postgresql://${{ secrets.DB_USER}}:${{ secrets.DB_PASSWORD }}@postgres:5432/${{ secrets.DB_NAME}}?schema=public" > .env
+          echo "DB_NAME=${{ secrets.DB_NAME}}" >> .env
+          echo "DB_USER=${{ secrets.DB_USER}}" >> .env
+          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD}}" >> .env
+          docker compose -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.prod.yml down
+          docker compose -f docker-compose.prod.yml up -d
+          docker exec app npx prisma migrate deploy
+          EOF
