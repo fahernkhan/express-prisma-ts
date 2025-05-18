@@ -70,6 +70,7 @@ jobs:
           docker compose -f docker-compose.prod.yml pull
           docker compose -f docker-compose.prod.yml down
           docker compose -f docker-compose.prod.yml up -d
+          docker logs express-prisma-app
           
           # Tunggu hingga container benar-benar running
           sleep 30
