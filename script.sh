@@ -146,3 +146,11 @@ sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin 
 
   # Cek apakah sudah bisa jalan
   docker compose version
+
+#docker
+psql -h localhost -p 5432 -U myuser -d mydatabase
+
+
+docker exec -it my_postgres bash
+psql -U myuser -d mydatabase
+

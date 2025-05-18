@@ -14,7 +14,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   app:
-    container_name: express-prisma-app
     image: ${DOCKER_USERNAME}/express-prisma-app:latest
     environment:
       - DATABASE_URL=${DATABASE_URL}
