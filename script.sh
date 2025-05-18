@@ -154,3 +154,4 @@ psql -h localhost -p 5432 -U myuser -d mydatabase
 docker exec -it my_postgres bash
 psql -U myuser -d mydatabase
 
+docker exec express-prisma-app npx prisma migrate deploy
