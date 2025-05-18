@@ -125,3 +125,24 @@ docker logs express-prisma-app
 
 # Test koneksi database
 docker exec postgres psql -U your_user -d your_db -c "\dt"
+
+## install docker compose:
+
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+##
+# Install Docker Compose Plugin (gunakan blok dari solusi 1 di sini jika belum)
+  sudo apt-get update -qq
+  sudo apt-get install -y docker-compose-plugin
+
+  # Cek apakah sudah bisa jalan
+  docker compose version
