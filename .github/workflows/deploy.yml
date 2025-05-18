@@ -26,14 +26,18 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/express-prisma-app:latest
 
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [build-push]
     steps:
+      - name: Checkout code  
+        uses: actions/checkout@v4
+
       - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
       - name: Transfer files
         run: |
